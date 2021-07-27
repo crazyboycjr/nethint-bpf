@@ -1,0 +1,28 @@
+[package]
+name = "nethint-probes"
+version = "0.1.0"
+edition = "2018"
+
+[build-dependencies]
+[build-dependencies.cargo-bpf]
+default-features = false
+path = "../../redbpf/cargo-bpf"
+features = ["bindings"]
+
+[dependencies]
+cty = "0.2"
+redbpf-macros = { path = "../../redbpf/redbpf-macros" }
+redbpf-probes = { path = "../../redbpf/redbpf-probes" }
+memoffset = "0.6.4"
+
+[features]
+default = []
+probes = []
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "nethint"
+path = "src/nethint/main.rs"
+required-features = ["probes"]

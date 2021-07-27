@@ -1,0 +1,115 @@
+
+#![no_std]
+#![no_main]
+// use cty::*;
+
+// use one of the preludes
+// use redbpf_probes::kprobe::prelude::*;
+use redbpf_probes::xdp::prelude::*;
+// use redbpf_probes::socket_filter::prelude::*;
+
+// Use the types you're going to share with userspace, eg:
+// use bpf-nethint::nethint::SomeEvent;
+
+use redbpf_probes::maps::HashMap;
+
+#[allow(non_upper_case_globals)]
+#[map("flow_table")]
+static mut flow_table: HashMap<u64, u64> = HashMap::with_max_entries(1024);
+
+#[allow(non_upper_case_globals)]
+#[map("global_vars")]
+static mut global_vars: HashMap<u64, u64> = HashMap::with_max_entries(4);
+// 0: last_ts
+// 1: num_flows
+// 2: avg_flows
+// 3: total_bytes
+
+
+const DURATION: u64 = 10_000_000; // 10ms
+#[allow(non_upper_case_globals)]
+static mut last_ts: u64 = 0;
+#[allow(non_upper_case_globals)]
+static mut num_flows: u64 = 0;
+#[allow(non_upper_case_globals)]
+static mut avg_flows: u64 = 0;
+#[allow(non_upper_case_globals)]
+static mut total_bytes: usize = 0;
+
+const HASH_BASE: u64 = 131;
+
+#[inline]
+fn hash_flow(saddr: u32, daddr: u32, sport: u16, dport: u16) -> u64 {
+    ((saddr as u64 * HASH_BASE + daddr as u64) * HASH_BASE + sport as u64) * HASH_BASE + dport as u64
+}
+
+
+program!(0xFFFFFFFE, "GPL");
+
+#[xdp]
+fn nethint(ctx: XdpContext) -> XdpResult {
+    // let ip = unsafe { &*ctx.ip()? as &iphdr };
+    // let transport = ctx.transport()?;
+
+    // let saddr = ip.saddr;
+    // let daddr = ip.daddr;
+    // let sport = transport.source();
+    // let dport = transport.dest();
+
+    // let label = hash_flow(saddr, daddr, sport, dport);
+
+    // let bytes = ctx.data()?.len() ;
+
+    // unsafe { total_bytes += bytes; }
+
+    unsafe {
+        global_vars.set(&0, &1);
+    }
+
+    // let now = bpf_ktime_get_ns();
+
+    // unsafe {
+    //     // initialize `last_ts` for the first time
+    //     if last_ts == 0 {
+    //         last_ts = now - DURATION;
+    //     }
+
+    //     if last_ts + DURATION >= now {
+    //         // update the moving average
+    //         avg_flows += num_flows;
+    //         // write this average value to user space
+    //         // clear the current flow table
+    //         flow_table = HashMap::with_max_entries(1024);
+    //         num_flows = 0;
+    //     }
+
+    //     // update the flows
+    //     if let Some(_) = flow_table.get_mut(&label) {
+    //         // do nothing
+    //     } else {
+    //         flow_table.set(&label, &1);
+    //         num_flows += 1;
+    //     }
+
+    //     last_ts = now;
+    // }
+
+    Ok(XdpAction::Pass)
+}
+
+// The maps and probe functions go here, eg:
+//
+// #[map("syscall_events")]
+// static mut syscall_events: PerfMap<SomeEvent> = PerfMap::with_max_entries(1024);
+//
+// #[kprobe("__x64_sys_open")]
+// fn syscall_enter(regs: Registers) {
+//   let pid_tgid = bpf_get_current_pid_tgid();
+//   ...
+//
+//   let event = SomeEvent {
+//     pid: pid_tgid >> 32,
+//     ...
+//   };
+//   unsafe { syscall_events.insert(regs.ctx, &event) };
+// }

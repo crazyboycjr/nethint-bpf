@@ -1,0 +1,2 @@
+[workspace]
+members = ["nethint-probes", "nethint-userspace"]

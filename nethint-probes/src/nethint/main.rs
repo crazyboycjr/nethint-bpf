@@ -1,78 +1,41 @@
-// This program can be executed by
-// # cargo run [interface]
 #![no_std]
 #![no_main]
-use core::mem::{self, MaybeUninit};
-use memoffset::offset_of;
 
 use redbpf_macros::map;
-use redbpf_probes::socket_filter::prelude::*;
+use redbpf_probes::xdp::prelude::*;
 
-use nethint_probes::nethint::{SocketAddr, TCPLifetime};
+use nethint_probes::nethint::FlowLabel;
 
-#[map(link_section = "maps/established")]
-static mut ESTABLISHED: HashMap<(SocketAddr, SocketAddr), u64> = HashMap::with_max_entries(10240);
-
-#[map(link_section = "maps/tcp_lifetime")]
-static mut TCP_LIFETIME: PerfMap<TCPLifetime> = PerfMap::with_max_entries(10240);
+// TODO(cjr): use a LRU map in case of more than 10240 flows
+// also note that this BPF_MAP_TYPE_HASH is not per CPU
+// BPF_MAP_TYPE_LRU_PERCPU_HASH is the one to use if needed.
+#[map(link_section = "maps/alive_flows")]
+static mut ALIVE_FLOWS: HashMap<FlowLabel, u64> = HashMap::with_max_entries(10240);
 
 program!(0xFFFFFFFE, "GPL");
-#[socket_filter]
-fn measure_tcp_lifetime(skb: SkBuff) -> SkBuffResult {
-    let eth_len = mem::size_of::<ethhdr>();
-    let eth_proto = skb.load::<__be16>(offset_of!(ethhdr, h_proto))? as u32;
-    if eth_proto != ETH_P_IP {
-        return Ok(SkBuffAction::Ignore);
-    }
 
-    let ip_proto = skb.load::<__u8>(eth_len + offset_of!(iphdr, protocol))? as u32;
-    if ip_proto != IPPROTO_TCP {
-        return Ok(SkBuffAction::Ignore);
-    }
+#[xdp]
+fn nethint_count_flows(ctx: XdpContext) -> XdpResult {
+    let ip = unsafe { &*ctx.ip()? as &iphdr };
+    let transport = ctx.transport()?;
 
-    let mut ip_hdr = unsafe { MaybeUninit::<iphdr>::zeroed().assume_init() };
-    ip_hdr._bitfield_1 = __BindgenBitfieldUnit::new([skb.load::<u8>(eth_len)?]);
-    if ip_hdr.version() != 4 {
-        return Ok(SkBuffAction::Ignore);
-    }
+    let proto = ip.protocol;
+    let saddr = ip.saddr;
+    let daddr = ip.daddr;
+    let sport = transport.source();
+    let dport = transport.dest();
+    let label = FlowLabel::new(proto, saddr, daddr, sport, dport);
 
-    let ihl = ip_hdr.ihl() as usize;
-    let src = SocketAddr::new(
-        skb.load::<__be32>(eth_len + offset_of!(iphdr, saddr))?,
-        skb.load::<__be16>(eth_len + ihl * 4 + offset_of!(tcphdr, source))?,
-    );
-    let dst = SocketAddr::new(
-        skb.load::<__be32>(eth_len + offset_of!(iphdr, daddr))?,
-        skb.load::<__be16>(eth_len + ihl * 4 + offset_of!(tcphdr, dest))?,
-    );
-    let pair = (src, dst);
-    let mut tcp_hdr = unsafe { MaybeUninit::<tcphdr>::zeroed().assume_init() };
-    tcp_hdr._bitfield_1 = __BindgenBitfieldUnit::new([
-        skb.load::<u8>(eth_len + ihl * 4 + offset_of!(tcphdr, _bitfield_1))?,
-        skb.load::<u8>(eth_len + ihl * 4 + offset_of!(tcphdr, _bitfield_1) + 1)?,
-    ]);
+    let bytes = ctx.data()?.len() as u64;
 
-    if tcp_hdr.syn() == 1 {
-        unsafe {
-            ESTABLISHED.set(&pair, &bpf_ktime_get_ns());
+    unsafe {
+        if let Some(v) = ALIVE_FLOWS.get_mut(&label) {
+            *v += bytes;
+        } else {
+            // insert the flow label into the map
+            ALIVE_FLOWS.set(&label, &bytes);
         }
     }
 
-    if tcp_hdr.fin() == 1 || tcp_hdr.rst() == 1 {
-        unsafe {
-            if let Some(estab_ts) = ESTABLISHED.get(&pair) {
-                ESTABLISHED.delete(&pair);
-                TCP_LIFETIME.insert(
-                    skb.skb as *mut __sk_buff,
-                    &TCPLifetime {
-                        src,
-                        dst,
-                        duration: bpf_ktime_get_ns() - estab_ts,
-                    },
-                );
-            }
-        }
-    }
-
-    Ok(SkBuffAction::Ignore)
+    Ok(XdpAction::Pass)
 }

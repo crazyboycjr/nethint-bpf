@@ -1,39 +1,25 @@
 use ::core::fmt;
-use ::core::mem::transmute;
 
-#[derive(Copy, Clone)]
+#[derive(Clone, Copy)]
 #[repr(C)]
-pub struct SocketAddr {
-    pub addr: u32,
-    pub port: u16,
-    _padding: u16,
-}
+pub struct FlowLabel(pub u64);
 
-#[repr(C)]
-pub struct TCPLifetime {
-    pub src: SocketAddr,
-    pub dst: SocketAddr,
-    pub duration: u64,
-}
+const HASH_BASE: u64 = 131;
 
-impl fmt::Display for SocketAddr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let octets: [u8; 4] = unsafe { transmute::<u32, [u8; 4]>(self.addr) };
-
-        write!(
-            f,
-            "{:^3}.{:^3}.{:^3}.{:^3}:{:<5}",
-            octets[3], octets[2], octets[1], octets[0], self.port
-        )
+impl FlowLabel {
+    #[inline]
+    pub fn new(proto: u8, saddr: u32, daddr: u32, sport: u16, dport: u16) -> Self {
+        // TODO(cjr): change this function to a more reasonable one
+        let v = (((proto as u64 * HASH_BASE + saddr as u64) * HASH_BASE + daddr as u64) * HASH_BASE
+            + sport as u64)
+            * HASH_BASE
+            + dport as u64;
+        FlowLabel(v)
     }
 }
 
-impl SocketAddr {
-    pub fn new(addr: u32, port: u16) -> Self {
-        SocketAddr {
-            addr,
-            port,
-            _padding: 0,
-        }
+impl fmt::Display for FlowLabel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:#018x}", self.0)
     }
 }

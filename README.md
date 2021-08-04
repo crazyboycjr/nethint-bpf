@@ -2,13 +2,14 @@
 
 ```
 git submodule update --init --recursive
-cargo r --bin nethint-user
-sudo -E cargo r --bin nethint-user <interface>
+cargo r
+sudo -E cargo r <interface>
 ```
 
 using nix flakes
 ```
+git submodule update --init --recursive
 nix develop
-cargo r --bin nethint-user
-sudo -E cargo r --bin nethint-user <interface>
+cargo r
+sudo -E cargo r <interface>
 ```

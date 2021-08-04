@@ -1,2 +1,3 @@
 [workspace]
 members = ["nethint-probes", "nethint-userspace"]
+exclude = ["redbpf"] # git submodule

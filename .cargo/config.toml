@@ -1,0 +1,8 @@
+[profile.dev]
+lto = false
+
+[profile.release]
+lto = false
+
+[build]
+rustflags = ["-C", "embed-bitcode"] # options `-C embed-bitcode=no` and `-C lto` are incompatible

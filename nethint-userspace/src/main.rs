@@ -39,7 +39,7 @@ async fn main() {
 
     // attach XDP
     for xdp in loaded.xdps_mut() {
-        xdp.attach_xdp(iface, xdp::Flags::UpdateIfNoExist)
+        xdp.attach_xdp(iface, xdp::Flags::SkbMode)
             .expect("unable to attach XDP");
     }
 

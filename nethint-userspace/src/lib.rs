@@ -3,39 +3,31 @@
 pub mod cmd_helper;
 
 use redbpf::Map;
-use std::fs;
+use std::path::Path;
 use std::process::Command;
-use tracing::error;
+use tracing::{info, error};
 
 pub struct AutoRemovePinnedMap {
-    path: String,
-    map: Option<Map>,
+    map: Map,
 }
 
 impl AutoRemovePinnedMap {
-    pub fn new(path: &str) -> Self {
-        AutoRemovePinnedMap {
-            path: path.to_owned(),
-            map: None,
-        }
-    }
-
-    pub fn set_map(&mut self, map: Map) {
-        self.map = Some(map);
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        let map = Map::from_pin_file(path).expect("error on Map::from_pin_file");
+        AutoRemovePinnedMap { map }
     }
 }
 
 impl AsRef<Map> for AutoRemovePinnedMap {
     fn as_ref(&self) -> &Map {
-        self.map.as_ref().unwrap()
+        &self.map
     }
 }
 
 impl Drop for AutoRemovePinnedMap {
     fn drop(&mut self) {
-        if self.map.is_some() {
-            fs::remove_file(&self.path).expect("fs::remove_file");
-        }
+        info!("unpin global BPF map");
+        let _ = self.map.unpin();
     }
 }
 

@@ -19,6 +19,10 @@ tracing = "0.1.26"
 tracing-subscriber = "0.2.18"
 anyhow = "1.0.38"
 shell-words = "1.0.0"
+nhagent_v2 = { path = "../../nethint-rs/src/nhagent_v2" }
+nethint = { path = "../../nethint-rs/src/nethint/" }
+serde = { version = "1.0.123", features = ["derive"] }
+structopt = "0.3.21"
 
 [[bin]]
 name = "nethint-user"

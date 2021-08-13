@@ -2,13 +2,13 @@
 // # sudo -E cargo run --bin nethint-user [interface]
 
 use std::env;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path;
-use std::process::{self, Command};
+use std::process;
 use tokio::signal::ctrl_c;
 use tokio::time::{sleep, Duration, Instant};
-use tracing::{error, info, trace, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing::{error, info, trace};
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 use nethint_userspace::{AutoRemovePinnedMap, TcRule};
 use probes::nethint::{BytesAddr, FlowLabel};
@@ -18,7 +18,8 @@ use nethint::counterunit::{AvgCounterUnit, CounterType, CounterUnit};
 use nhagent_v2::{argument::Opts, sdn_controller};
 use structopt::StructOpt;
 
-const NETHINT_INTERVAL_MS: Duration = Duration::from_millis(100);
+const ENV_NH_LOG: &str = "NH_LOG";
+
 const SUB_INTERVAL_MS: Duration = Duration::from_millis(10);
 
 const TC_FLOW_MAP_INGRESS: &str = "/sys/fs/bpf/tc/globals/flow_map_ingress";
@@ -57,8 +58,11 @@ fn load_tc(
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    if env::var(ENV_NH_LOG).is_err() {
+        env::set_var(ENV_NH_LOG, "info");
+    }
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::TRACE)
+        .with_env_filter(EnvFilter::from_env(ENV_NH_LOG))
         .finish();
     tracing::subscriber::set_global_default(subscriber).unwrap();
     if unsafe { libc::geteuid() != 0 } {
@@ -67,12 +71,15 @@ async fn main() {
     }
 
     let opts = Opts::from_args();
-    let iface = opts.iface.unwrap_or("lo".to_owned());
+    let iface = opts.iface.clone().unwrap_or("rdma0".to_owned());
+    let rack_leader = opts
+        .rack_leader
+        .unwrap_or_else(|| get_default_rack_leader(opts.sampler_listen_port));
+    let interval_ms = Duration::from_millis(opts.interval_ms);
+    assert!(SUB_INTERVAL_MS <= interval_ms);
 
     let bpf_elf = probe_path();
     info!(bpf_elf);
-
-    strip_bpf_elf(bpf_elf);
 
     info!(
         "Attaching tc BPF program to `{}' interface as direct action",
@@ -96,8 +103,6 @@ async fn main() {
     let flow_map_egress = BpfHashMap::<FlowLabel, BytesAddr>::new(map_egress.as_ref())
         .expect("error on BpfHashMap::new egress");
 
-    let mut last_ts = Instant::now();
-
     let local_ip_table = sdn_controller::get_local_ip_table().unwrap();
 
     let mut counters: Vec<(IpAddr, CounterUnit)> = local_ip_table
@@ -113,6 +118,12 @@ async fn main() {
         .collect();
 
     let rack_iptable = sdn_controller::get_rack_ip_table().unwrap();
+
+    let mut last_ts = Instant::now();
+    let sock = std::net::UdpSocket::bind("0.0.0.0:34254").expect("bind failed");
+    info!("rack_leader: {}", rack_leader);
+    sock.connect(rack_leader).expect("connect failed");
+    sock.set_write_timeout(Some(interval_ms)).unwrap();
 
     let event_fut = async {
         loop {
@@ -156,11 +167,22 @@ async fn main() {
 
             // send the collected metrics out
             let now = Instant::now();
-            if now >= last_ts + NETHINT_INTERVAL_MS {
-                // send the results to the collector
+            if now >= last_ts + interval_ms {
                 trace!("{:?}", avg_counters);
-                last_ts = now;
+                // send the results to the collector
+                let counter: Vec<CounterUnit> = avg_counters
+                    .iter()
+                    .cloned()
+                    .map(|(_, a)| a.into())
+                    .collect();
+                let buf = bincode::serialize(&counter).expect("fail to serialize counter");
+                assert!(buf.len() <= 65507);
+                match sock.send(&buf) {
+                    Ok(_nbytes) => {}
+                    Err(_e) => {}
+                }
 
+                last_ts = now;
                 for (_, c) in &mut avg_counters {
                     c.clear_bytes();
                 }
@@ -189,23 +211,9 @@ const fn probe_path() -> &'static str {
     concat!(env!("OUT_DIR"), "/target/bpf/programs/nethint/nethint.elf")
 }
 
-fn strip_bpf_elf<P: AsRef<path::Path>>(path: P) {
-    // remove .BTF.ext and .eh_frame in order to remove .text
-    // remove .text section because tc filter does not work if .text exists
-    // remove .BTF section because it contains invalid names of BTF types
-    // (currently kernel only allows valid symbol names of C)
-    for sec in &[".BTF.ext", ".eh_frame", ".text", ".BTF"] {
-        if !Command::new("llvm-strip")
-            .arg("--strip-unneeded")
-            .arg("--remove-section")
-            .arg(sec)
-            .arg(path.as_ref())
-            .status()
-            .expect("error on running command llvm-strip")
-            .success()
-        {
-            error!("error on removing section `{}' using llvm-strip", sec);
-            process::exit(2);
-        }
-    }
+fn get_default_rack_leader(sampler_listen_port: u16) -> SocketAddr {
+    SocketAddr::new(
+        sdn_controller::get_rack_leader_ipv4().into(),
+        sampler_listen_port,
+    )
 }
